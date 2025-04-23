@@ -114,24 +114,34 @@ function startKeyCheckTimer() {
 
     // Start a new timer that checks if shortcut is still registered
     keyCheckInterval = setInterval(() => {
-        // When shortcut is released, it will be re-registerable
-        const isRegisterable = globalShortcut.registerAll([SHORTCUT], () => {
-            // Immediately unregister to restore normal operation 
+        // Test if the shortcut is released by trying to register a temporary handler
+        let keyReleased = false;
+        
+        try {
+            // If this succeeds without error, it means the shortcut is not currently pressed
+            globalShortcut.register(SHORTCUT, () => {});
+            keyReleased = true;
+            // Clean up the temporary registration
             globalShortcut.unregister(SHORTCUT);
-        });
+        } catch (e) {
+            // If we get here, the shortcut is still being held down
+            keyReleased = false;
+        }
 
-        if (isRegisterable && isOverlayVisible) {
-            // If shortcut can be registered again and overlay is visible, it means keys were released
+        if (keyReleased && isOverlayVisible) {
+            // If keys were released and overlay is visible, hide it
             hideOverlay();
             clearInterval(keyCheckInterval!);
             keyCheckInterval = null;
             
             // Restore the main shortcut handler
             registerMainShortcut();
-        } else if (isRegisterable) {
+        } else if (keyReleased) {
             // Just cleanup if overlay isn't visible
             clearInterval(keyCheckInterval!);
             keyCheckInterval = null;
+            // Make sure main shortcut is registered
+            registerMainShortcut();
         }
     }, 100); // Check every 100ms
 }
@@ -139,7 +149,11 @@ function startKeyCheckTimer() {
 // Register the main shortcut handler
 function registerMainShortcut() {
     // Unregister first to avoid duplicates
-    globalShortcut.unregister(SHORTCUT);
+    try {
+        globalShortcut.unregister(SHORTCUT);
+    } catch (e) {
+        console.warn(`Error unregistering shortcut: ${e}`);
+    }
     
     // Register the shortcut
     const registered = globalShortcut.register(SHORTCUT, () => {
