@@ -9,41 +9,39 @@ remoteMain.initialize();
 let overlayWindow: BrowserWindow | null = null;
 let imagePaths: string[] = [];
 let currentImageIndex = 0;
-const SHORTCUT = 'Alt+Space'; // Define the shortcut
+const SHORTCUT = 'Alt+F';
 
 // Timer for checking if keys are still held
 let keyCheckInterval: NodeJS.Timeout | null = null;
 let isOverlayVisible = false;
 
 function loadImagePaths() {
-    // __dirname points to the 'dist' folder where main.js runs from
-    // We need to go up one level ('..') and then into 'images'
-    const imagesDir = path.resolve(__dirname, '..', 'images');
-    console.log(`Looking for images in: ${imagesDir}`);
-    imagePaths = []; // Reset list
-    currentImageIndex = 0; // Reset index
+    // We know these images exist in the images folder at the root of the project
+    const workspaceDir = app.getAppPath();
+    console.log(`App path: ${workspaceDir}`);
+    
+    // Hard code the list of known images
+    const imageFiles = [
+        '0_gHANif08o4nJZF14.png',
+        'istockphoto-1257169887-612x612.jpg',
+        'istockphoto-1830236402-612x612.jpg',
+        'Screenshot 2025-04-23 202743.png'
+    ];
+    
+    // Create absolute paths for each file
+    imagePaths = imageFiles.map(file => {
+        // This is the absolute path to each image
+        const absolutePath = path.join(workspaceDir, 'images', file);
+        return absolutePath;
+    });
 
-    if (fs.existsSync(imagesDir)) {
-        try {
-            const files = fs.readdirSync(imagesDir);
-            const supportedExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
-            imagePaths = files
-                .filter(file => supportedExtensions.includes(path.extname(file).toLowerCase()))
-                .map(file => path.join(imagesDir, file)); // Store absolute paths
-            console.log(`Found images: ${imagePaths.length > 0 ? imagePaths.join(', ') : 'None'}`);
-        } catch (err) {
-            console.error('Error reading images directory:', err);
-        }
-    } else {
-        console.warn(`Images directory not found: ${imagesDir}`);
-        // Create the directory if it doesn't exist
-        try {
-            fs.mkdirSync(imagesDir, { recursive: true }); 
-            console.log(`Created images directory: ${imagesDir}`);
-        } catch (mkdirErr) {
-            console.error('Error creating images directory:', mkdirErr);
-        }
-    }
+    console.log("Hard-coded image paths:");
+    imagePaths.forEach((imagePath, index) => {
+        const exists = fs.existsSync(imagePath);
+        console.log(`Image ${index}: ${imagePath} - Exists: ${exists}`);
+    });
+    
+    currentImageIndex = 0;
 }
 
 function createOverlayWindow() {
@@ -55,24 +53,28 @@ function createOverlayWindow() {
         height: height,
         x: primaryDisplay.workArea.x,
         y: primaryDisplay.workArea.y,
-        transparent: true, // Allows for transparency
-        frame: false, // No window frame (borders, close button, etc.)
-        alwaysOnTop: true, // Keep the window on top of others
-        skipTaskbar: true, // Don't show in the taskbar
-        show: false, // Start hidden
+        transparent: true,
+        frame: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        show: false,
         webPreferences: {
-            preload: path.join(__dirname, 'preload.js'), // Use compiled preload
-            nodeIntegration: false, // Disable Node.js integration in renderer for security
-            contextIsolation: true, // Isolate renderer context from main process
-            devTools: !app.isPackaged // Enable DevTools only in development
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            devTools: !app.isPackaged
         },
     });
 
     // Enable @electron/remote for this window
     remoteMain.enable(overlayWindow.webContents);
 
-    // Make sure loadFile path is correct relative to __dirname (dist)
     overlayWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
+
+    // Open DevTools in development mode
+    if (!app.isPackaged) {
+        overlayWindow.webContents.openDevTools({ mode: 'detach' });
+    }
 
     overlayWindow.on('closed', () => {
         overlayWindow = null;
@@ -83,13 +85,55 @@ function createOverlayWindow() {
 }
 
 function showOverlay() {
-    if (!overlayWindow || imagePaths.length === 0) return;
+    if (!overlayWindow || imagePaths.length === 0) {
+        console.log('Cannot show overlay: ' + 
+            (!overlayWindow ? 'No overlay window' : 'No images found'));
+        return;
+    }
     
     const imageToShow = imagePaths[currentImageIndex];
     console.log(`Showing image index ${currentImageIndex}: ${imageToShow}`);
-    overlayWindow.webContents.send('show-image', imageToShow);
+    
+    if (fs.existsSync(imageToShow)) {
+        console.log(`Image file exists when attempting to show`);
+        
+        try {
+            // Read the image directly as binary data
+            const imageData = fs.readFileSync(imageToShow);
+            
+            // Convert to base64 with the proper mime type
+            const base64Image = imageData.toString('base64');
+            const mimeType = getMimeType(imageToShow);
+            
+            // Create a data URL that the renderer can use directly
+            const dataUrl = `data:${mimeType};base64,${base64Image}`;
+            console.log(`Created data URL for image with mime type: ${mimeType}`);
+            
+            // Send the data URL to the renderer
+            overlayWindow.webContents.send('show-image', dataUrl);
+        } catch (err) {
+            console.error('Error processing image:', err);
+        }
+    } else {
+        console.error(`Image file does not exist: ${imageToShow}`);
+    }
+    
     overlayWindow.show();
     isOverlayVisible = true;
+}
+
+// Helper function to determine MIME type from file extension
+function getMimeType(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase();
+    switch (ext) {
+        case '.png': return 'image/png';
+        case '.jpg': 
+        case '.jpeg': return 'image/jpeg';
+        case '.gif': return 'image/gif';
+        case '.webp': return 'image/webp';
+        case '.bmp': return 'image/bmp';
+        default: return 'image/png';
+    }
 }
 
 function hideOverlay() {
@@ -104,7 +148,7 @@ function hideOverlay() {
     console.log(`Next image index will be: ${currentImageIndex}`);
 }
 
-// Check if Alt+Space is still being held down by periodically checking globalShortcut
+// Check if Alt+F is still being held down by periodically checking globalShortcut
 function startKeyCheckTimer() {
     // Clear existing timer if any
     if (keyCheckInterval) {
